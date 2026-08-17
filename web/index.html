@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MTL Pulse — Buses</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<script src="https://unpkg.com/deck.gl@9.0.33/dist.min.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0a0a0a; color: #eee;
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+
+  #panel {
+    position: absolute; top: 12px; left: 12px; z-index: 10;
+    background: rgba(20, 20, 24, 0.85); backdrop-filter: blur(8px);
+    padding: 14px 16px; border-radius: 8px; min-width: 280px;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  #panel h1 { margin: 0 0 4px; font-size: 14px; font-weight: 600; letter-spacing: 0.04em; }
+  #panel .sub { font-size: 11px; color: #888; margin-bottom: 12px; }
+  #clock { font-size: 18px; font-family: "SF Mono", Menlo, monospace; margin: 6px 0 10px; color: #6cf; }
+  #stats { font-size: 11px; color: #aaa; margin-bottom: 10px; }
+  #stats span { color: #fff; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+  .row label { color: #888; min-width: 56px; }
+  input[type="range"] { flex: 1; }
+  button {
+    background: #2a2a32; color: #eee; border: 1px solid #3a3a44;
+    padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  button:hover { background: #3a3a44; }
+  button.active { background: #6cf; color: #000; border-color: #6cf; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h1>MTL PULSE</h1>
+  <div class="sub">STM buses · trail replay</div>
+  <div id="clock">--:--:--</div>
+  <div id="stats">Loading…</div>
+
+  <div class="row">
+    <label>Time</label>
+    <input type="range" id="timeSlider" min="0" max="1000" value="0" step="1" />
+  </div>
+  <div class="row">
+    <label>Speed</label>
+    <button data-speed="30">30×</button>
+    <button data-speed="60" class="active">60×</button>
+    <button data-speed="120">120×</button>
+    <button data-speed="300">300×</button>
+  </div>
+  <div class="row">
+    <label>Trail</label>
+    <input type="range" id="trailSlider" min="60" max="1800" value="600" step="60" />
+    <span id="trailVal" style="font-size:11px;color:#888;min-width:40px;text-align:right;">10m</span>
+  </div>
+  <div class="row">
+    <label></label>
+    <button id="playBtn">⏸ Pause</button>
+    <button id="resetBtn">⟲ Reset</button>
+  </div>
+</div>
+
+<script>
+const { TripsLayer } = deck;
+const { ScatterplotLayer, MapboxOverlay } = deck;
+
+fetch("../data/trips.json").then(r => r.json()).then(init).catch(err => {
+  document.getElementById("stats").textContent = "❌ trips.json 載入失敗: " + err.message;
+});
+
+function init(data) {
+  const { start_time, duration_sec, trips } = data;
+  const startMs = new Date(start_time).getTime();
+  const totalPoints = trips.reduce((a, t) => a + t.path.length, 0);
+
+  document.getElementById("stats").innerHTML =
+    `<span>${trips.length.toLocaleString()}</span> vehicles · ` +
+    `<span>${totalPoints.toLocaleString()}</span> points · ` +
+    `<span>${(duration_sec/60).toFixed(0)}</span> min`;
+
+  // 同 route 同色
+  const routeColor = (() => {
+    const cache = {};
+    return (route) => {
+      if (!cache[route]) {
+        let h = 0;
+        for (const c of route || "") h = (h * 31 + c.charCodeAt(0)) >>> 0;
+        cache[route] = hslToRgb((h % 360) / 360, 0.7, 0.6);
+      }
+      return cache[route];
+    };
+  })();
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    center: [-73.5772, 45.5048],
+    zoom: 11,
+    pitch: 45,
+    bearing: -10,
+    attributionControl: false,
+  });
+  map.addControl(new maplibregl.AttributionControl({ compact: true }));
+
+  const overlay = new MapboxOverlay({ interleaved: false, layers: [] });
+  map.on("load", () => {
+    map.addControl(overlay);
+    animate();
+  });
+
+  let currentTime = 0;
+  let speed = 60;
+  let trailLength = 600;
+  let playing = true;
+  let lastFrameMs = performance.now();
+
+  const slider = document.getElementById("timeSlider");
+  slider.max = duration_sec;
+  slider.addEventListener("input", e => {
+    currentTime = +e.target.value;
+    playing = false;
+    document.getElementById("playBtn").textContent = "▶ Play";
+    render();
+  });
+
+  const trailSlider = document.getElementById("trailSlider");
+  trailSlider.addEventListener("input", e => {
+    trailLength = +e.target.value;
+    document.getElementById("trailVal").textContent =
+      trailLength >= 60 ? `${Math.round(trailLength/60)}m` : `${trailLength}s`;
+    render();
+  });
+
+  document.querySelectorAll("button[data-speed]").forEach(b => {
+    b.addEventListener("click", () => {
+      speed = +b.dataset.speed;
+      document.querySelectorAll("button[data-speed]").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+    });
+  });
+
+  document.getElementById("playBtn").addEventListener("click", e => {
+    playing = !playing;
+    e.target.textContent = playing ? "⏸ Pause" : "▶ Play";
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    currentTime = 0;
+    render();
+  });
+
+  function animate() {
+    const now = performance.now();
+    const dt = (now - lastFrameMs) / 1000;
+    lastFrameMs = now;
+    if (playing) {
+      currentTime += dt * speed;
+      if (currentTime > duration_sec) currentTime = 0;
+    }
+    render();
+    requestAnimationFrame(animate);
+  }
+
+  function render() {
+    slider.value = currentTime;
+    const realMs = startMs + currentTime * 1000;
+    document.getElementById("clock").textContent =
+      new Date(realMs).toLocaleTimeString("en-CA", { hour12: false }) +
+      "  · t+" + Math.floor(currentTime) + "s";
+
+    // 找出當下每台車的位置 (線性插值), 給 ScatterplotLayer 畫頭點
+    const heads = [];
+    for (const trip of trips) {
+      const ts = trip.timestamps;
+      if (currentTime < ts[0] || currentTime > ts[ts.length - 1]) continue;
+      let lo = 0, hi = ts.length - 1;
+      while (lo < hi - 1) {
+        const mid = (lo + hi) >> 1;
+        if (ts[mid] <= currentTime) lo = mid; else hi = mid;
+      }
+      const t0 = ts[lo], t1 = ts[hi];
+      const f = t1 === t0 ? 0 : (currentTime - t0) / (t1 - t0);
+      const p0 = trip.path[lo], p1 = trip.path[hi];
+      heads.push({
+        position: [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f],
+        color: routeColor(trip.route_id),
+      });
+    }
+
+    overlay.setProps({
+      layers: [
+        new TripsLayer({
+          id: "trails",
+          data: trips,
+          getPath: d => d.path,
+          getTimestamps: d => d.timestamps,
+          getColor: d => routeColor(d.route_id),
+          opacity: 0.8,
+          widthMinPixels: 2,
+          rounded: true,
+          trailLength,
+          currentTime,
+        }),
+        new ScatterplotLayer({
+          id: "heads",
+          data: heads,
+          getPosition: d => d.position,
+          getFillColor: d => d.color,
+          getRadius: 30,
+          radiusMinPixels: 3,
+          radiusMaxPixels: 6,
+          stroked: true,
+          getLineColor: [255, 255, 255, 200],
+          lineWidthMinPixels: 1,
+        }),
+      ],
+    });
+  }
+}
+
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+</script>
+
+</body>
+</html>

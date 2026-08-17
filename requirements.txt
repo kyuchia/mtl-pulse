@@ -1,0 +1,9 @@
+certifi==2026.2.25
+charset-normalizer==3.4.7
+gtfs-realtime-bindings==2.0.0
+idna==3.11
+opensky-api @ git+https://github.com/openskynetwork/opensky-api.git@5bcc39a8f6d485ff7113fa4aa6d6608ea7e9da02#subdirectory=python
+protobuf==7.34.1
+psycopg2-binary==2.9.11
+requests==2.33.1
+urllib3==2.6.3
