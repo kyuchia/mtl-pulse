@@ -11,8 +11,8 @@
 
 <style>
   :root {
-    --accent-a: #59b2c6;   /* 冷青 */
-    --accent-b: #7f93e2;   /* 藍紫 */
+    --accent-a: #59b2c6;   /* cold cyan */
+    --accent-b: #7f93e2;   /* blue-violet */
     --ink:       #e8ecf2;
     --ink-dim:   #8b93a1;
     --ink-faint: #5c6373;
@@ -49,14 +49,14 @@
   .iconbtn:hover { background: rgba(255,255,255,0.08); color: var(--ink); }
   .iconbtn svg { width: 14px; height: 14px; display: block; }
 
-  /* 折疊：只留標題列 + 時鐘 */
+  /* Collapsed: title row + clock only */
   #panel.collapsed { min-width: 0; padding-bottom: 12px; }
   #panel.collapsed .sub,
   #panel.collapsed #panelBody { display: none; }
   #panel.collapsed #clock { margin-bottom: 0; font-size: 16px; }
   #panel.collapsed #chevron { transform: rotate(180deg); }
 
-  /* 完全隱藏：面板消失，左上角留一顆按鈕 */
+  /* Fully hidden: panel disappears, one button left in the top-left corner */
   #panel.gone { display: none; }
   #showBtn {
     position: absolute; top: 14px; left: 14px; z-index: 10; display: none;
@@ -82,6 +82,27 @@
     -webkit-text-fill-color: transparent; color: transparent;
   }
   #stats, #live { font-size: 11px; color: var(--ink-dim); }
+  /* Which window and which modes were actually served. Without this, a mismatch
+     between the URL and the rendered data is invisible. */
+  #source {
+    font-size: 10px; color: var(--ink-faint); line-height: 1.5;
+    font-variant-numeric: tabular-nums; margin-bottom: 2px;
+  }
+  #source b { color: var(--ink-dim); font-weight: 500; }
+  #source.live b { color: #8fd0c4; }
+  /* Any fallback or non-200 has to be impossible to miss: a silent fallback is what
+     made a dead backend look like a working page. */
+  #banner {
+    display: none; margin: 8px 0 2px; padding: 7px 9px; border-radius: 6px;
+    font-size: 11px; line-height: 1.45;
+    background: rgba(214, 138, 46, 0.14);
+    border: 1px solid rgba(226, 158, 74, 0.45);
+    color: #f0c48a;
+  }
+  #banner.show { display: block; }
+  #banner.err { background: rgba(214, 60, 60, 0.15);
+                border-color: rgba(233, 92, 92, 0.5); color: #f2a2a2; }
+  #banner code { font-family: "SF Mono", Menlo, monospace; font-size: 10px; }
   #live { margin-bottom: 12px; }
   #stats span, #live span { color: var(--ink); font-weight: 500; }
 
@@ -145,12 +166,12 @@
   }
   .mode .tag { margin-left: auto; font-size: 10px; color: #4c525f; letter-spacing: 0.04em;
                font-variant-numeric: tabular-nums; }
-  /* 關掉：軌道退成灰，圓點滑回左邊但保持白色 */
+  /* Off: track fades to grey, knob slides back left but stays white */
   .mode.hidden { color: var(--ink-faint); }
   .mode.hidden .sw { background-image: none !important;
                      background-color: rgba(255,255,255,0.20) !important; }
   .mode.hidden .kn { left: 2px; }
-  /* 資料裡沒有這個運具：開關整個失效 */
+  /* Mode absent from the data: the whole switch is disabled */
   .mode.off { color: var(--ink-faint); }
   .mode.off .sw { background-image: none !important;
                   background-color: rgba(255,255,255,0.10) !important; }
@@ -186,6 +207,8 @@
   <div id="panelBody">
   <div id="stats">Loading…</div>
   <div id="live">&nbsp;</div>
+  <div id="source"></div>
+  <div id="banner"></div>
 
   <div class="row">
     <label>Time</label>
@@ -229,8 +252,9 @@
 <script>
 const { TripsLayer, ScatterplotLayer, MapboxOverlay } = deck;
 
-/* ---- 面板折疊 / 隱藏 ----------------------------------------
-   跟資料無關，所以放在 init() 外面 — 就算 trips.json 掛了也能用。
+/* ---- Panel collapse / hide ----------------------------------
+   Independent of the data, so it lives outside init() — it still works even
+   if trips.json fails to load.
    ------------------------------------------------------------ */
 (function () {
   const panel = document.getElementById("panel");
@@ -251,7 +275,7 @@ const { TripsLayer, ScatterplotLayer, MapboxOverlay } = deck;
     showBtn.classList.remove("visible");
   });
 
-  // Esc 收起面板，方便截圖
+  // Esc hides the panel, handy for screenshots
   window.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
     panel.classList.toggle("gone");
@@ -260,87 +284,307 @@ const { TripsLayer, ScatterplotLayer, MapboxOverlay } = deck;
 })();
 
 /* ============================================================
-   配色系統 — 方向 A：按運具單色，速度只改明暗
+   Colour system — direction A: one hue per mode, speed only changes brightness
    ------------------------------------------------------------
-   一個運具 = 一個 hue 家族。層次來自「這是什麼車」+「它跑多快」，
-   不是路線號碼。加新圖層時只要在這裡加一筆，其他都不用動。
+   One transit mode = one hue family. The hierarchy comes from "what kind of
+   vehicle" + "how fast it is moving", never from the route number. Adding a
+   new layer means adding one entry here and changing nothing else.
    ============================================================ */
+/* Governing principle — OFFICIAL COLOURS ARE INPUTS, NOT CHOICES.
+   ------------------------------------------------------------------
+   Where an agency publishes a brand colour, that hex is a fixed constraint and we
+   use it verbatim: STM's four metro lines, and REM's #73A400 (straight out of
+   route_color in its GTFS). We never invent a hue for a mode that already has one —
+   an earlier revision gave REM an arbitrary hue 100 and put it 49° from metro Green,
+   when the two official greens are 71° apart and already designed to coexist.
+
+   When two OFFICIAL colours sit close (REM lime vs metro Green emerald; metro Orange
+   vs metro Yellow), the fix is lightness/chroma separation, never a hue change.
+   Only modes with no official colour — bus, aircraft, train — may have a hue chosen
+   for separation.
+
+   Every pairing here is checked by scripts/check_colours.js (CIEDE2000 over full
+   ramps); run it after touching anything in this block. */
 const MODES = {
   bus: {
-    label: "Bus",         hue: 191,   // 冷青
-    speedFast: 12,                     // m/s ≈ 43 km/h → 顏色最亮
+    // The background layer, and by far the densest. Separated from metro Blue by
+    // CHROMA rather than hue: near-achromatic so it reads as texture instead of
+    // competing with the lines. Desaturating at its old hue 191 was not enough
+    // (ΔE 6.3 → 5.7); going achromatic is what actually works (→ 11.1).
+    label: "Bus",         hue: 200,
+    env: { s0: 0.00, s1: 0.10, l0: 0.30, l1: 0.26 },
+    speedFast: 12,                     // m/s ≈ 43 km/h → brightest colour
     width: 2, radius: [22, 26],
   },
   aircraft: {
-    label: "Aircraft",    hue: 38,    // 琥珀
+    // Was amber 38, which sat inside metro Orange (28) and Yellow (50) — the worst
+    // collision in the whole scheme at ΔE 4.6. Crimson is clear of both.
+    label: "Aircraft",    hue: 4,
     speedFast: 230,                    // m/s ≈ 830 km/h
     width: 2.5, radius: [40, 40],
   },
   train: {
-    label: "Train (exo)", hue: 276,   // 紫
+    label: "Train (exo)", hue: 260,   // indigo-violet, clear of metro Blue 203
     speedFast: 28,
     width: 2.5, radius: [30, 30],
   },
-  // 地鐵不用單一 hue — STM 四條線有官方顏色，之後 metro 圖層直接查這張表
+  rem: {
+    // REM's own brand green, verbatim from route_color: #73A400 = hsl(78, 100%, 32%),
+    // a lime/yellow-green, 71° from metro Green's emerald 149. The lightness floor is
+    // lifted so the two greens stay apart at their dark ends too (ΔE 10.5 → 12.0);
+    // REM is grade-separated and rarely crawls, so its slow end is the least-used
+    // part of its ramp and the cheapest place to spend that adjustment.
+    label: "REM",         official: "#73A400",
+    env: { l0: 0.30, l1: 0.42 },
+    speedFast: 26,
+    width: 2.5, radius: [28, 28],
+  },
+  // Metro does not use a single hue — STM's four lines have official colours,
+  // so the metro layer looks them up in this table. Each line gets its own ramp
+  // built from that hex, so speed shading still works inside a line's colour.
   metro: {
     label: "Metro",       hue: null,
     speedFast: 18,
     width: 3, radius: [30, 30],
     lines: { "1": "#00A650", "2": "#F58220", "4": "#FFD400", "5": "#0072BC" },
+    // Yellow alone barely registers on the dark basemap (ΔE 23.8 vs the background,
+    // against 42.2 once lifted). Its hue is fixed, so the floor is raised instead —
+    // a ramp-parameter change, where per-line width would mean splitting metro into
+    // four separate TripsLayers.
+    lineEnv: { "4": { s0: 0.34, s1: 0.56, l0: 0.40, l1: 0.34 } },
   },
 };
 
 const LUT_STEPS = 24;
 
-function buildRamp(hue) {
+// Default speed envelope: slow = dark and desaturated (parked vehicles read as
+// background noise), fast = bright and saturated. A mode may override any of these
+// via `env` to separate itself on lightness/chroma when its hue is not negotiable.
+const RAMP = { l0: 0.24, l1: 0.48, s0: 0.30, s1: 0.60 };
+
+function buildRamp(hue, env) {
+  const e = Object.assign({}, RAMP, env || {});
   const ramp = [];
   for (let i = 0; i < LUT_STEPS; i++) {
     const t = i / (LUT_STEPS - 1);
-    // 慢 = 暗且灰（停著的車像底噪）；快 = 亮且飽和
-    const l = 0.24 + 0.48 * t;
-    const s = 0.30 + 0.60 * t;
-    // 高速端偏移 14 度，同一運具內部也不是單一支純色
+    const l = e.l0 + e.l1 * t;
+    const s = e.s0 + e.s1 * t;
+    // The fast end shifts 14°, so even a single mode is not one flat colour
     const h = (hue + 14 * t) % 360;
     ramp.push(hslToRgb(h / 360, s, l));
   }
   return ramp;
 }
 
+// Hue of a hex colour. Only the hue is taken: saturation and lightness come from
+// buildRamp's curve, so an official line colour still reads as the same family while
+// keeping the slow-dark / fast-bright behaviour every other mode has.
+function hexHue(hex) {
+  const v = parseInt(hex.replace("#", ""), 16);
+  const r = ((v >> 16) & 255) / 255, g = ((v >> 8) & 255) / 255, b = (v & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (d === 0) return 0;
+  let h;
+  if (max === r)      h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else                h = (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
+}
+
 for (const m of Object.values(MODES)) {
-  if (m.hue !== null) {
-    m.ramp = buildRamp(m.hue);
+  // A mode with an official brand colour derives its hue from that hex, never a
+  // hand-picked number — same rule metro's four lines already follow.
+  if (m.official) m.hue = hexHue(m.official);
+  if (m.hue !== null && m.hue !== undefined) {
+    m.ramp = buildRamp(m.hue, m.env);
     m.base = m.ramp[Math.round(LUT_STEPS * 0.68)];
+  } else if (m.lines) {
+    // One ramp per line. Without this, m.ramp stays undefined and the first metro
+    // trip to arrive throws inside rampColor().
+    m.ramps = {};
+    m.bases = {};
+    for (const [lineId, hex] of Object.entries(m.lines)) {
+      const ramp = buildRamp(hexHue(hex), (m.lineEnv || {})[lineId]);
+      m.ramps[lineId] = ramp;
+      m.bases[lineId] = ramp[Math.round(LUT_STEPS * 0.68)];
+    }
+    // Fallback for a trip on an unknown line, and for the legend's gradient bar.
+    const firstLine = Object.keys(m.lines)[0];
+    m.ramp = m.ramps[firstLine];
+    m.base = m.bases[firstLine];
   }
 }
 
-function rampColor(mode, t) {
-  const i = Math.round(Math.max(0, Math.min(1, t)) * (LUT_STEPS - 1));
-  return mode.ramp[i];
+// The ramp a specific trip should use. Single-hue modes share one; metro resolves by
+// route_id, which is exactly what the simulator puts in `label`.
+function tripRamp(trip) {
+  const m = MODES[trip.mode];
+  if (m.ramps) return m.ramps[trip.label] || m.ramp;
+  return m.ramp;
 }
 
-const SPEED_REJECT_FACTOR = 4;  // 超過該運具 speedFast 的 N 倍 → 視為 GPS 跳點
-const SPEED_GAMMA = 0.75;       // <1 = 把中低速拉亮一點
+function rampAt(ramp, t) {
+  const i = Math.round(Math.max(0, Math.min(1, t)) * (LUT_STEPS - 1));
+  return ramp[i];
+}
+
+function rampColor(mode, t) {
+  return rampAt(mode.ramp, t);
+}
+
+const SPEED_REJECT_FACTOR = 4;  // above N× this mode's speedFast → treat as a GPS jump
+const SPEED_GAMMA = 0.75;       // <1 = lifts the low/mid speed range a little
 
 /* ============================================================ */
 
-fetch("../data/trips.json").then(r => r.json()).then(init).catch(err => {
-  document.getElementById("stats").textContent = "trips.json 載入失敗：" + err.message;
-});
+/* ------------------------------------------------------------------
+   Data loading.
+
+   Every parameter present in the page URL is forwarded verbatim to
+   /api/trips, so /web/?layer=all&start=...&end=... renders exactly what
+   the same query returns via curl.
+
+   A window is derived from /api/range ONLY when the URL supplies none.
+   Which default depends on the layer: /api/range's `overlap` only knows
+   the recorded tables, so it is meaningless for simulated modes — those
+   use `busiest_hour` instead.
+
+   The static export is still a fallback, but never a silent one: any
+   fallback or non-200 is reported in the panel, because a silent
+   fallback is exactly what made a dead backend look like a working page.
+   ------------------------------------------------------------------ */
+
+const STATIC_URL = "../data/trips.json";
+const PASSTHROUGH = ["layer", "start", "end", "hours", "route",
+                     "min_points", "include_ground"];
+const SIM_MODES = ["metro", "train", "rem"];
+
+function banner(msg, isError) {
+  const el = document.getElementById("banner");
+  el.innerHTML = msg;
+  el.className = "show" + (isError ? " err" : "");
+}
+
+function fmtClock(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso)
+    : d.toLocaleString([], { month: "short", day: "numeric",
+                             hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// Pull the point count out of the API's 413 detail so the banner can state it.
+async function describeFailure(res, url) {
+  let detail = "";
+  try {
+    const body = await res.json();
+    if (body && body.detail) detail = " — " + body.detail;
+  } catch (e) { /* non-JSON error body */ }
+  return "<code>" + url + "</code> returned <b>" + res.status + "</b>" + detail;
+}
+
+function widestLayer(layers) {
+  let best = null;
+  for (const v of Object.values(layers || {})) {
+    if (!v.min_time || !v.max_time) continue;
+    const span = new Date(v.max_time) - new Date(v.min_time);
+    if (!best || span > best.span) {
+      best = { span, start: v.min_time, end: v.max_time };
+    }
+  }
+  return best;
+}
+
+async function loadFromApi(state) {
+  const page = new URLSearchParams(location.search);
+  const q = new URLSearchParams();
+  for (const k of PASSTHROUGH) {
+    if (page.has(k)) q.set(k, page.get(k));
+  }
+  state.forwarded = [...q.keys()];
+
+  const layer = q.get("layer") || "both";
+  const wantsSim = layer === "all" || SIM_MODES.includes(layer);
+
+  // Only derive a window when the URL gave none.
+  if (!q.has("start") && !q.has("end") && !q.has("hours")) {
+    const rangeRes = await fetch("/api/range");
+    if (!rangeRes.ok) throw new Error(await describeFailure(rangeRes, "/api/range"));
+    const range = await rangeRes.json();
+
+    // `overlap` is bus ∩ aircraft — the right default for recorded layers, and the
+    // wrong one for simulated modes, which it knows nothing about.
+    const win = wantsSim
+      ? (range.busiest_hour || range.overlap || widestLayer(range.layers))
+      : (range.overlap || widestLayer(range.layers));
+
+    if (win) {
+      q.set("start", win.start);
+      q.set("end", win.end);
+      state.derived = wantsSim ? "busiest recorded hour" : "recorded overlap";
+    }
+  }
+
+  const url = "/api/trips?" + q.toString();
+  state.url = url;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(await describeFailure(res, "/api/trips"));
+  return res.json();
+}
+
+// What was actually served — shown so a mismatch with the URL is obvious at a glance.
+function showSource(data, state) {
+  const el = document.getElementById("source");
+  const modes = (data.modes || []).join(", ") || "—";
+  const bits = [];
+  bits.push("<b>" + fmtClock(data.start_time) + "</b> → <b>" +
+            fmtClock(data.end_time) + "</b>");
+  bits.push("modes <b>" + modes + "</b>");
+  bits.push(state.live ? "source <b>/api/trips</b>" : "source <b>static file</b>");
+  if (state.derived) bits.push("window: " + state.derived);
+  else if (state.live) bits.push("window: from URL");
+  el.innerHTML = bits.join(" · ");
+  el.className = state.live ? "live" : "";
+}
+
+const loadState = { live: false, derived: null, url: null, forwarded: [] };
+
+loadFromApi(loadState)
+  .then(data => { loadState.live = true; return data; })
+  .catch(err => {
+    // Loud, in the panel — not just the console.
+    banner("API unavailable: " + err.message +
+           "<br>Showing static <code>" + STATIC_URL + "</code> instead — " +
+           "this is <b>not</b> the window you asked for.", false);
+    console.warn("API load failed:", err.message);
+    return fetch(STATIC_URL).then(r => {
+      if (!r.ok) throw new Error(STATIC_URL + " → " + r.status);
+      return r.json();
+    });
+  })
+  .then(data => { init(data); showSource(data, loadState); })
+  .catch(err => {
+    document.getElementById("stats").textContent = "Load failed";
+    banner("Nothing could be loaded. " + String(err.message || err), true);
+  });
 
 function init(data) {
   const { start_time, duration_sec, trips } = data;
   const startMs = new Date(start_time).getTime();
 
-  // 舊版 trips.json 沒有 mode 欄位 → 一律當公車，向後相容
+  // Older trips.json has no mode field → treat everything as a bus (backward compatible)
   for (const trip of trips) {
     if (!MODES[trip.mode]) trip.mode = "bus";
     if (trip.label == null) trip.label = trip.route_id ?? null;
     if (trip.id == null) trip.id = trip.vehicle_id ?? null;
+    // Resolved once here so the render loop never has to look a line up per frame.
+    trip.ramp = tripRamp(trip);
+    trip.baseColor = trip.ramp[Math.round(LUT_STEPS * 0.68)];
   }
 
   buildSpeeds(trips);
 
-  // 依運具分組，每個運具各自一組圖層
+  // Group by mode; each mode gets its own set of layers
   const byMode = {};
   for (const trip of trips) (byMode[trip.mode] ||= []).push(trip);
 
@@ -368,10 +612,32 @@ function init(data) {
   map.addControl(new maplibregl.AttributionControl({ compact: true }));
 
   const overlay = new MapboxOverlay({ interleaved: false, layers: [] });
-  map.on("load", () => {
-    map.addControl(overlay);
-    animate();
+
+  // The replay must not depend on the basemap. Attaching the deck.gl overlay needs the
+  // map's GL context, so that still waits for "load" — but the animation loop does not,
+  // and gating it on "load" meant a slow or failed CARTO fetch froze the whole replay at
+  // --:--:-- even though the data was already in memory.
+  let overlayAttached = false;
+  function attachOverlay() {
+    if (overlayAttached) return;
+    overlayAttached = true;
+    try {
+      map.addControl(overlay);
+    } catch (e) {
+      banner("Basemap overlay failed to attach: " + e.message +
+             "<br>Trails cannot draw, though the data loaded fine.", true);
+    }
+  }
+
+  map.on("load", attachOverlay);
+  map.on("error", e => {
+    const msg = (e && e.error && e.error.message) || "unknown error";
+    banner("Basemap failed to load (<code>" + msg + "</code>). " +
+           "The replay clock keeps running; map tiles and trails may be missing.", false);
   });
+  // The animation loop is kicked off at the end of init(), NOT here: `animate` closes
+  // over `lastFrameMs`/`currentTime`, which are declared below, so starting it at this
+  // point hits the temporal dead zone. It also must not wait for map "load" — see below.
 
   let currentTime = 0;
   let speed = 60;
@@ -422,6 +688,12 @@ function init(data) {
     render();
   });
 
+  // Deliberately not gated on map "load". Attaching the deck.gl overlay needs the map's
+  // GL context and so does wait for that event, but the replay itself does not: gating
+  // the loop on "load" meant a slow or failed CARTO basemap froze the clock at --:--:--
+  // even though every trip was already in memory.
+  animate();
+
   function animate() {
     const now = performance.now();
     const dt = (now - lastFrameMs) / 1000;
@@ -449,7 +721,8 @@ function init(data) {
       const mode = MODES[key];
       const modeTrips = byMode[key];
 
-      // 當下每台車的位置 + 速度（線性插值），給 ScatterplotLayer 畫頭點
+      // Each vehicle's current position + speed (linear interpolation),
+      // feeding the ScatterplotLayer head dots
       const heads = [];
       for (const trip of modeTrips) {
         const ts = trip.timestamps;
@@ -465,7 +738,7 @@ function init(data) {
         const sn = trip.speedNorm[lo] + (trip.speedNorm[hi] - trip.speedNorm[lo]) * f;
         heads.push({
           position: [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f],
-          color: speedShading ? rampColor(mode, sn) : mode.base,
+          color: speedShading ? rampAt(trip.ramp, sn) : trip.baseColor,
           radius: mode.radius[0] + mode.radius[1] * sn,
         });
       }
@@ -476,8 +749,9 @@ function init(data) {
         data: modeTrips,
         getPath: d => d.path,
         getTimestamps: d => d.timestamps,
-        // 逐 vertex 上色：同一台車在路口會暗下來、順暢時亮起來
-        getColor: speedShading ? (d => d.colors) : (d => MODES[d.mode].base),
+        // Per-vertex colouring: the same vehicle dims at intersections and
+        // brightens when it is flowing
+        getColor: speedShading ? (d => d.colors) : (d => d.baseColor),
         updateTriggers: { getColor: speedShading },
         opacity: 0.85,
         widthMinPixels: mode.width,
@@ -509,11 +783,12 @@ function init(data) {
 }
 
 /* ============================================================
-   從軌跡本身算速度
+   Compute speed from the path itself
    ------------------------------------------------------------
-   trips.json 沒有 speed 欄位，而 DB 裡 GTFS-RT 給的 speed 常常是
-   null，所以直接用相鄰兩點的距離 / 時間差。取樣間隔 + GPS 抖動會有
-   雜訊，所以做了跳點過濾 + 3 點平滑。
+   trips.json carries no speed field, and the GTFS-RT speed stored in the DB is
+   frequently null, so speed comes from the distance / time difference between
+   consecutive points. Sampling interval + GPS jitter make that noisy, hence the
+   jump rejection and 3-point smoothing.
    ============================================================ */
 function buildSpeeds(trips) {
   for (const trip of trips) {
@@ -542,7 +817,7 @@ function buildSpeeds(trips) {
       const sm = (a + 2 * b + c) / 4;
       const t = Math.pow(Math.min(sm / mode.speedFast, 1), SPEED_GAMMA);
       norm[i] = t;
-      colors[i] = rampColor(mode, t);   // 共用 LUT 陣列，不會爆記憶體
+      colors[i] = rampAt(trip.ramp, t);   // shared LUT array, so this does not blow up memory
     }
 
     trip.speedNorm = norm;
@@ -550,7 +825,7 @@ function buildSpeeds(trips) {
   }
 }
 
-// 等距長方投影近似，在都會尺度誤差可忽略，比 haversine 快
+// Equirectangular approximation: negligible error at city scale, faster than haversine
 function metersBetween(a, b) {
   const R = 6371000, D = Math.PI / 180;
   const dLat = (b[1] - a[1]) * D;
@@ -566,7 +841,8 @@ function buildLegend(byMode, enabled, onToggle) {
     const trips = byMode[key];
     const has = !!trips;
 
-    // 色塊也用漸層：有 ramp 的取慢→快兩端，地鐵用四條線的官方色
+    // The swatch is a gradient too: modes with a ramp use its slow→fast ends,
+    // metro uses its four official line colours
     const swatch = m.hue !== null
       ? `linear-gradient(135deg, rgb(${m.ramp[4].join(",")}), rgb(${m.ramp[LUT_STEPS - 1].join(",")}))`
       : `linear-gradient(135deg, ${Object.values(m.lines).join(", ")})`;
@@ -588,9 +864,14 @@ function buildLegend(byMode, enabled, onToggle) {
     list.appendChild(row);
   }
 
-  // 漸層條由第一個有資料的運具生成，永遠跟地圖上的顏色一致
+  // The gradient bar is generated from the first mode that has data, so it always
+  // matches the colours on the map
   const first = Object.keys(byMode)[0] || "bus";
-  const ramp = MODES[first].ramp;
+  // Neutral grey, always. The bar explains the ENCODING — dark = slow, bright = fast —
+  // and must not imply a hue: built from whichever mode happened to be first in the
+  // data, it rendered as one green scale and read as though the whole map used it.
+  // Each mode's own slow→fast gradient is already shown in its toggle swatch.
+  const ramp = buildRamp(0, { s0: 0, s1: 0 });
   document.getElementById("ramp").style.background =
     `linear-gradient(90deg, ${ramp.map(c => `rgb(${c.join(",")})`).join(", ")})`;
   document.getElementById("rampHi").textContent =

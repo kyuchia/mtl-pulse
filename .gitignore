@@ -8,3 +8,4 @@ claude_log/
 archive/
 .DS_Store
 .env
+gtfs/
