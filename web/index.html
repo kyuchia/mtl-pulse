@@ -36,10 +36,42 @@
                 inset 0 1px 0 rgba(255, 255, 255, 0.07);
   }
 
+  #panelHead { display: flex; align-items: center; gap: 8px; }
   #panel h1 {
     margin: 0 0 3px; font-size: 13px; font-weight: 600; letter-spacing: 0.14em;
     color: var(--ink);
   }
+  #panelBtns { margin-left: auto; display: flex; gap: 2px; }
+  .iconbtn {
+    background: none; border: none; padding: 2px 4px; border-radius: 4px;
+    color: var(--ink-faint); cursor: pointer; line-height: 0;
+  }
+  .iconbtn:hover { background: rgba(255,255,255,0.08); color: var(--ink); }
+  .iconbtn svg { width: 14px; height: 14px; display: block; }
+
+  /* 折疊：只留標題列 + 時鐘 */
+  #panel.collapsed { min-width: 0; padding-bottom: 12px; }
+  #panel.collapsed .sub,
+  #panel.collapsed #panelBody { display: none; }
+  #panel.collapsed #clock { margin-bottom: 0; font-size: 16px; }
+  #panel.collapsed #chevron { transform: rotate(180deg); }
+
+  /* 完全隱藏：面板消失，左上角留一顆按鈕 */
+  #panel.gone { display: none; }
+  #showBtn {
+    position: absolute; top: 14px; left: 14px; z-index: 10; display: none;
+    width: 40px; height: 40px; padding: 0; align-items: center; justify-content: center;
+    background: rgba(20, 23, 30, 0.55);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255,255,255,0.09); border-radius: 11px;
+    color: var(--ink-dim); cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  }
+  #showBtn.visible { display: flex; }
+  #showBtn:hover { color: var(--ink); }
+  #showBtn svg { width: 22px; height: 22px; }
+
   #panel .sub { font-size: 11px; color: var(--ink-faint); margin-bottom: 14px; letter-spacing: 0.02em; }
 
   #clock {
@@ -96,25 +128,33 @@
   }
   .mode {
     display: flex; align-items: center; gap: 9px;
-    font-size: 12px; color: #c4ccd8; margin: 3px 0; padding: 4px 5px;
+    font-size: 12px; color: #c4ccd8; margin: 3px 0; padding: 4px 4px;
     border-radius: 5px; user-select: none;
-    transition: background 100ms ease, opacity 100ms ease;
+    transition: background 100ms ease, color 120ms ease;
   }
   .mode.on { cursor: pointer; }
   .mode.on:hover { background: rgba(255,255,255,0.06); }
-  .mode .dot {
-    width: 14px; height: 14px; border-radius: 4px; flex: none;
-    border: 1px solid rgba(255,255,255,0.30);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+  .mode .sw {
+    width: 24px; height: 13px; border-radius: 7px; flex: none; position: relative;
+    transition: background-color 130ms ease;
+  }
+  .mode .kn {
+    position: absolute; top: 2px; left: 13px; width: 9px; height: 9px;
+    border-radius: 50%; background: #ffffff;
+    transition: left 130ms ease, background 130ms ease;
   }
   .mode .tag { margin-left: auto; font-size: 10px; color: #4c525f; letter-spacing: 0.04em;
                font-variant-numeric: tabular-nums; }
-  .mode.off { color: var(--ink-faint); }          /* 資料裡沒有這個運具 */
-  .mode.off .dot { opacity: 0.28; }
-  /* 有資料但被使用者關掉 → 色塊變空心，一眼看得出是「沒勾」 */
+  /* 關掉：軌道退成灰，圓點滑回左邊但保持白色 */
   .mode.hidden { color: var(--ink-faint); }
-  .mode.hidden .dot { background-image: none !important; background-color: transparent !important;
-                      border-color: rgba(255,255,255,0.22); box-shadow: none; }
+  .mode.hidden .sw { background-image: none !important;
+                     background-color: rgba(255,255,255,0.20) !important; }
+  .mode.hidden .kn { left: 2px; }
+  /* 資料裡沒有這個運具：開關整個失效 */
+  .mode.off { color: var(--ink-faint); }
+  .mode.off .sw { background-image: none !important;
+                  background-color: rgba(255,255,255,0.10) !important; }
+  .mode.off .kn { left: 2px; background: #3a3f4a; }
   #legendHint { font-size: 10px; color: #4c525f; margin: 0 0 6px 1px; letter-spacing: 0.03em; }
   #ramp { height: 6px; border-radius: 3px; margin: 10px 0 4px; }
   #rampLabels { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-faint); }
@@ -127,9 +167,23 @@
 <div id="map"></div>
 
 <div id="panel">
-  <h1>MTL PULSE</h1>
+  <div id="panelHead">
+    <h1>MTL PULSE</h1>
+    <div id="panelBtns">
+      <button class="iconbtn" id="collapseBtn" title="Collapse panel" aria-label="Collapse panel">
+        <svg id="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+      </button>
+      <button class="iconbtn" id="hideBtn" title="Hide panel" aria-label="Hide panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/><path d="M4 4v16"/></svg>
+      </button>
+    </div>
+  </div>
   <div class="sub">Montréal transit · trail replay</div>
   <div id="clock">--:--:--</div>
+
+  <div id="panelBody">
   <div id="stats">Loading…</div>
   <div id="live">&nbsp;</div>
 
@@ -157,15 +211,53 @@
   </div>
 
   <div id="legend">
-    <div id="legendHint">LAYERS · click to toggle</div>
+    <div id="legendHint">LAYERS</div>
     <div id="modeList"></div>
     <div id="ramp"></div>
     <div id="rampLabels"><span id="rampLo">stopped</span><span id="rampHi">fast</span></div>
   </div>
+  </div>
 </div>
+
+<button id="showBtn" title="Show panel" aria-label="Show panel">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>
+  </svg>
+</button>
 
 <script>
 const { TripsLayer, ScatterplotLayer, MapboxOverlay } = deck;
+
+/* ---- 面板折疊 / 隱藏 ----------------------------------------
+   跟資料無關，所以放在 init() 外面 — 就算 trips.json 掛了也能用。
+   ------------------------------------------------------------ */
+(function () {
+  const panel = document.getElementById("panel");
+  const showBtn = document.getElementById("showBtn");
+
+  document.getElementById("collapseBtn").addEventListener("click", () => {
+    const collapsed = panel.classList.toggle("collapsed");
+    document.getElementById("collapseBtn").title = collapsed ? "Expand panel" : "Collapse panel";
+  });
+
+  document.getElementById("hideBtn").addEventListener("click", () => {
+    panel.classList.add("gone");
+    showBtn.classList.add("visible");
+  });
+
+  showBtn.addEventListener("click", () => {
+    panel.classList.remove("gone");
+    showBtn.classList.remove("visible");
+  });
+
+  // Esc 收起面板，方便截圖
+  window.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    panel.classList.toggle("gone");
+    showBtn.classList.toggle("visible");
+  });
+})();
 
 /* ============================================================
    配色系統 — 方向 A：按運具單色，速度只改明暗
@@ -482,7 +574,7 @@ function buildLegend(byMode, enabled, onToggle) {
     const row = document.createElement("div");
     row.className = "mode " + (has ? "on" : "off");
     row.innerHTML =
-      `<span class="dot" style="background:${swatch}"></span>` +
+      `<span class="sw" style="background:${swatch}"><span class="kn"></span></span>` +
       `<span>${m.label}</span>` +
       `<span class="tag">${has ? trips.length.toLocaleString() : "soon"}</span>`;
 
