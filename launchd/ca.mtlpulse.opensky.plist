@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  MTL Pulse opensky fetcher, as a per-user LaunchAgent.
+
+  Deliberately contains NO secrets: the fetcher reads its credentials from the login
+  Keychain at startup (fetchers/secrets.py). A LaunchAgent runs inside the user's GUI
+  session, so that keychain is already unlocked.
+
+  caffeinate -i is ProgramArguments[0] so the sleep assertion is tied to the fetcher's
+  own lifetime and appears in 'pmset -g assertions'. Running 'caffeinate -i &' as a
+  standalone background job is what failed before: it belongs to the shell that
+  launched it and dies with the terminal. This form cannot.
+
+  pmset -c sleep 0 is still the durable backstop; this assertion is the second layer.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ca.mtlpulse.opensky</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>/Users/chia/Desktop/Chia/personal_project/mtl-pulse/venv/bin/python</string>
+        <string>/Users/chia/Desktop/Chia/personal_project/mtl-pulse/fetchers/opensky_fetcher.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/chia/Desktop/Chia/personal_project/mtl-pulse</string>
+
+    <!-- Non-secret only. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PG_DSN</key>
+        <string>dbname=mtl_pulse</string>
+        <key>MTL_PLAN_HOURS</key>
+        <string>12</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it ever exits; 'launchctl bootout' removes the job outright, so
+         this does not fight a deliberate stop. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Interactive avoids App Nap / background throttling of a network poller. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chia/Desktop/Chia/personal_project/mtl-pulse/fetchers/logs/opensky-launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chia/Desktop/Chia/personal_project/mtl-pulse/fetchers/logs/opensky-launchd.err</string>
+</dict>
+</plist>

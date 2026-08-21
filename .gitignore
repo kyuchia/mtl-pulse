@@ -9,3 +9,4 @@ archive/
 .DS_Store
 .env
 gtfs/
+fetchers/logs/
