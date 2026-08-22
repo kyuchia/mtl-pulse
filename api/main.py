@@ -9,7 +9,7 @@ Run from the project root:
 
     uvicorn api.main:app --reload --port 8000
 
-Then open http://localhost:8000/web/ — the page is served by this same app, which also
+Then open http://localhost:8000/docs/ — the page is served by this same app, which also
 retires the old "you must start the server from the project root" trap.
 """
 
@@ -327,16 +327,18 @@ def api_health():
 
 # ---------------------------------------------------------------- static
 
-# `web/index.html` falls back to fetching ../data/trips.json, which resolves to /data/
-# when the page is served from /web/ — so both directories are mounted, and the static
+# `docs/index.html` falls back to fetching ../data/trips.json, which resolves to /data/
+# when the page is served from /docs/ — so both directories are mounted, and the static
 # workflow keeps working through this server too.
 DATA_DIR = ROOT / "data"
 if DATA_DIR.is_dir():
     app.mount("/data", StaticFiles(directory=str(DATA_DIR)), name="data")
 
-app.mount("/web", StaticFiles(directory=str(ROOT / "web"), html=True), name="web")
+# Served as /docs/ because GitHub Pages publishes from main:/docs — one directory feeds
+# both the local API mode and the static Pages deployment, so they cannot drift.
+app.mount("/docs", StaticFiles(directory=str(ROOT / "docs"), html=True), name="docs")
 
 
 @app.get("/")
 def root():
-    return RedirectResponse(url="/web/")
+    return RedirectResponse(url="/docs/")

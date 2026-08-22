@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Colour-collision regression check for web/index.html.
+ * Colour-collision regression check for docs/index.html.
  *
  *   node scripts/check_colours.js          # table + pass/fail
  *   node scripts/check_colours.js --quiet  # exit code only
@@ -30,7 +30,7 @@ const MIN_DE = 10.8;                 // = the immovable metro Orange/Yellow floo
 const BASEMAP = [14, 16, 19];        // CARTO dark-matter background
 const MIN_BASEMAP_DE = 12;           // below this a mode disappears into the map
 
-const htmlPath = path.join(__dirname, "..", "web", "index.html");
+const htmlPath = path.join(__dirname, "..", "docs", "index.html");
 const html = fs.readFileSync(htmlPath, "utf8");
 const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map(m => m[1]).sort((a, b) => b.length - a.length)[0];
@@ -44,7 +44,11 @@ const stub = () => new Proxy({
 
 const sandbox = {
   document: { getElementById: stub, createElement: stub, addEventListener() {}, body: stub(), querySelectorAll: () => [] },
-  window: { addEventListener() {} }, location: { search: "" }, console: { warn() {}, log() {} },
+  window: { addEventListener() {} }, console: { warn() {}, log() {} },
+  // hostname matters: docs/index.html branches on location.hostname to decide whether
+  // it is running on GitHub Pages. Stub it as a local host so the colour system is
+  // evaluated on the same path the local app takes.
+  location: { search: "", hostname: "localhost", href: "http://localhost/" },
   fetch: () => new Promise(() => {}), performance: { now: () => 0 }, requestAnimationFrame: () => {},
   deck: { TripsLayer: function () {}, ScatterplotLayer: function () {}, MapboxOverlay: function () {} },
   maplibregl: { Map: function () { return { on() {}, addControl() {} }; }, AttributionControl: function () {} },

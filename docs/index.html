@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>sillage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<script src="https://unpkg.com/deck.gl@9.0.33/dist.min.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+
+<style>
+  :root {
+    --accent-a: #59b2c6;   /* cold cyan */
+    --accent-b: #7f93e2;   /* blue-violet */
+    --ink:       #e8ecf2;
+    --ink-dim:   #8b93a1;
+    --ink-faint: #5c6373;
+  }
+
+  html, body { margin: 0; padding: 0; height: 100%; background: #08090c; color: var(--ink);
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+
+  #panel {
+    position: absolute; top: 14px; left: 14px; z-index: 10;
+    min-width: 286px; padding: 16px 18px 14px;
+    background: linear-gradient(158deg,
+                rgba(30, 34, 43, 0.52) 0%,
+                rgba(14, 16, 21, 0.38) 100%);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 12px;
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45),
+                inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  }
+
+  #panelHead { display: flex; align-items: center; gap: 8px; }
+  #panel h1 {
+    margin: 0 0 3px; font-size: 13px; font-weight: 600; letter-spacing: 0.14em;
+    color: var(--ink);
+  }
+  #panelBtns { margin-left: auto; display: flex; gap: 2px; }
+  .iconbtn {
+    background: none; border: none; padding: 2px 4px; border-radius: 4px;
+    color: var(--ink-faint); cursor: pointer; line-height: 0;
+  }
+  .iconbtn:hover { background: rgba(255,255,255,0.08); color: var(--ink); }
+  .iconbtn svg { width: 14px; height: 14px; display: block; }
+
+  /* Collapsed: title row + clock only */
+  #panel.collapsed { min-width: 0; padding-bottom: 12px; }
+  #panel.collapsed .sub,
+  #panel.collapsed #panelBody { display: none; }
+  #panel.collapsed #clock { margin-bottom: 0; font-size: 16px; }
+  #panel.collapsed #chevron { transform: rotate(180deg); }
+
+  /* Fully hidden: panel disappears, one button left in the top-left corner */
+  #panel.gone { display: none; }
+  #showBtn {
+    position: absolute; top: 14px; left: 14px; z-index: 10; display: none;
+    width: 40px; height: 40px; padding: 0; align-items: center; justify-content: center;
+    background: rgba(20, 23, 30, 0.55);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255,255,255,0.09); border-radius: 11px;
+    color: var(--ink-dim); cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  }
+  #showBtn.visible { display: flex; }
+  #showBtn:hover { color: var(--ink); }
+  #showBtn svg { width: 22px; height: 22px; }
+
+  #panel .sub { font-size: 11px; color: var(--ink-faint); margin-bottom: 14px; letter-spacing: 0.02em; }
+
+  #clock {
+    font-size: 19px; font-family: "SF Mono", Menlo, monospace;
+    margin: 6px 0 5px;
+    background: linear-gradient(96deg, var(--accent-a), var(--accent-b));
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  #stats, #live { font-size: 11px; color: var(--ink-dim); }
+  /* Which window and which modes were actually served. Without this, a mismatch
+     between the URL and the rendered data is invisible. */
+  #source {
+    font-size: 10px; color: var(--ink-faint); line-height: 1.5;
+    font-variant-numeric: tabular-nums; margin-bottom: 2px;
+  }
+  #source b { color: var(--ink-dim); font-weight: 500; }
+  #source.live b { color: #8fd0c4; }
+  /* Any fallback or non-200 has to be impossible to miss: a silent fallback is what
+     made a dead backend look like a working page. */
+  #banner {
+    display: none; margin: 8px 0 2px; padding: 7px 9px; border-radius: 6px;
+    font-size: 11px; line-height: 1.45;
+    background: rgba(214, 138, 46, 0.14);
+    border: 1px solid rgba(226, 158, 74, 0.45);
+    color: #f0c48a;
+  }
+  #banner.show { display: block; }
+  #banner.err { background: rgba(214, 60, 60, 0.15);
+                border-color: rgba(233, 92, 92, 0.5); color: #f2a2a2; }
+  #banner code { font-family: "SF Mono", Menlo, monospace; font-size: 10px; }
+  #live { margin-bottom: 12px; }
+  #stats span, #live span { color: var(--ink); font-weight: 500; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; font-size: 12px; }
+  .row label { color: var(--ink-faint); min-width: 54px; }
+
+  input[type="range"] {
+    flex: 1; height: 3px; -webkit-appearance: none; appearance: none;
+    background: linear-gradient(90deg, rgba(89,178,198,0.55), rgba(127,147,226,0.55));
+    border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: #eef3f9; border: none; cursor: pointer;
+    box-shadow: 0 0 0 3px rgba(120, 180, 220, 0.16);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%; border: none;
+    background: #eef3f9; cursor: pointer;
+  }
+  input[type="range"]:focus-visible { box-shadow: 0 0 0 2px rgba(147,168,240,0.65); }
+
+  button {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--ink-dim);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.10); color: var(--ink); }
+  button:focus-visible { outline: 2px solid rgba(147,168,240,0.7); outline-offset: 1px; }
+  button.active {
+    background: linear-gradient(135deg, rgba(89,178,198,0.28), rgba(127,147,226,0.28));
+    border-color: rgba(130, 180, 225, 0.48);
+    color: #dff0f8;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+  }
+
+  /* ---- legend ---- */
+  #legend {
+    display: none;
+    margin: 13px 0 2px; padding-top: 11px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .mode {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 12px; color: #c4ccd8; margin: 3px 0; padding: 4px 4px;
+    border-radius: 5px; user-select: none;
+    transition: background 100ms ease, color 120ms ease;
+  }
+  .mode.on { cursor: pointer; }
+  .mode.on:hover { background: rgba(255,255,255,0.06); }
+  .mode .sw {
+    width: 24px; height: 13px; border-radius: 7px; flex: none; position: relative;
+    transition: background-color 130ms ease;
+  }
+  .mode .kn {
+    position: absolute; top: 2px; left: 13px; width: 9px; height: 9px;
+    border-radius: 50%; background: #ffffff;
+    transition: left 130ms ease, background 130ms ease;
+  }
+  .mode .tag { margin-left: auto; font-size: 10px; color: #4c525f; letter-spacing: 0.04em;
+               font-variant-numeric: tabular-nums; }
+  /* Off: track fades to grey, knob slides back left but stays white */
+  .mode.hidden { color: var(--ink-faint); }
+  .mode.hidden .sw { background-image: none !important;
+                     background-color: rgba(255,255,255,0.20) !important; }
+  .mode.hidden .kn { left: 2px; }
+  /* Mode absent from the data: the whole switch is disabled */
+  .mode.off { color: var(--ink-faint); }
+  .mode.off .sw { background-image: none !important;
+                  background-color: rgba(255,255,255,0.10) !important; }
+  .mode.off .kn { left: 2px; background: #3a3f4a; }
+  #legendHint { font-size: 10px; color: #4c525f; margin: 0 0 6px 1px; letter-spacing: 0.03em; }
+  #ramp { height: 6px; border-radius: 3px; margin: 10px 0 4px; }
+  #rampLabels { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-faint); }
+
+  @media (prefers-reduced-motion: reduce) { button, .mode { transition: none; } }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <div id="panelHead">
+    <h1>SILLAGE</h1>
+    <div id="panelBtns">
+      <button class="iconbtn" id="collapseBtn" title="Collapse panel" aria-label="Collapse panel">
+        <svg id="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+      </button>
+      <button class="iconbtn" id="hideBtn" title="Hide panel" aria-label="Hide panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/><path d="M4 4v16"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="sub">Montréal transit · trail replay</div>
+  <div id="clock">--:--:--</div>
+
+  <div id="panelBody">
+  <div id="stats">Loading…</div>
+  <div id="live">&nbsp;</div>
+  <div id="source"></div>
+  <div id="banner"></div>
+
+  <div class="row" id="sceneRow" style="display:none">
+    <label>Scene</label>
+    <select id="sceneSel" style="flex:1"></select>
+  </div>
+
+  <div class="row">
+    <label>Time</label>
+    <input type="range" id="timeSlider" min="0" max="1000" value="0" step="1" />
+  </div>
+  <div class="row">
+    <label>Speed</label>
+    <button data-speed="30">30×</button>
+    <button data-speed="60" class="active">60×</button>
+    <button data-speed="120">120×</button>
+    <button data-speed="300">300×</button>
+  </div>
+  <div class="row">
+    <label>Trail</label>
+    <input type="range" id="trailSlider" min="60" max="1800" value="600" step="60" />
+    <span id="trailVal" style="font-size:11px;color:#5c6373;min-width:40px;text-align:right;">10m</span>
+  </div>
+  <div class="row">
+    <label></label>
+    <button id="playBtn">⏸ Pause</button>
+    <button id="resetBtn">⟲ Reset</button>
+    <button id="shadeBtn" class="active">Speed shading</button>
+  </div>
+
+  <div id="legend">
+    <div id="legendHint">LAYERS</div>
+    <div id="modeList"></div>
+    <div id="ramp"></div>
+    <div id="rampLabels"><span id="rampLo">stopped</span><span id="rampHi">fast</span></div>
+  </div>
+  </div>
+</div>
+
+<button id="showBtn" title="Show panel" aria-label="Show panel">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>
+  </svg>
+</button>
+
+<script>
+const { TripsLayer, ScatterplotLayer, MapboxOverlay } = deck;
+
+/* ---- Panel collapse / hide ----------------------------------
+   Independent of the data, so it lives outside init() — it still works even
+   if trips.json fails to load.
+   ------------------------------------------------------------ */
+(function () {
+  const panel = document.getElementById("panel");
+  const showBtn = document.getElementById("showBtn");
+
+  document.getElementById("collapseBtn").addEventListener("click", () => {
+    const collapsed = panel.classList.toggle("collapsed");
+    document.getElementById("collapseBtn").title = collapsed ? "Expand panel" : "Collapse panel";
+  });
+
+  document.getElementById("hideBtn").addEventListener("click", () => {
+    panel.classList.add("gone");
+    showBtn.classList.add("visible");
+  });
+
+  showBtn.addEventListener("click", () => {
+    panel.classList.remove("gone");
+    showBtn.classList.remove("visible");
+  });
+
+  // Esc hides the panel, handy for screenshots
+  window.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    panel.classList.toggle("gone");
+    showBtn.classList.toggle("visible");
+  });
+})();
+
+/* ============================================================
+   Colour system — direction A: one hue per mode, speed only changes brightness
+   ------------------------------------------------------------
+   One transit mode = one hue family. The hierarchy comes from "what kind of
+   vehicle" + "how fast it is moving", never from the route number. Adding a
+   new layer means adding one entry here and changing nothing else.
+   ============================================================ */
+/* Governing principle — OFFICIAL COLOURS ARE INPUTS, NOT CHOICES.
+   ------------------------------------------------------------------
+   Where an agency publishes a brand colour, that hex is a fixed constraint and we
+   use it verbatim: STM's four metro lines, and REM's #73A400 (straight out of
+   route_color in its GTFS). We never invent a hue for a mode that already has one —
+   an earlier revision gave REM an arbitrary hue 100 and put it 49° from metro Green,
+   when the two official greens are 71° apart and already designed to coexist.
+
+   When two OFFICIAL colours sit close (REM lime vs metro Green emerald; metro Orange
+   vs metro Yellow), the fix is lightness/chroma separation, never a hue change.
+   Only modes with no official colour — bus, aircraft, train — may have a hue chosen
+   for separation.
+
+   Every pairing here is checked by scripts/check_colours.js (CIEDE2000 over full
+   ramps); run it after touching anything in this block. */
+const MODES = {
+  bus: {
+    // The background layer, and by far the densest. Separated from metro Blue by
+    // CHROMA rather than hue: near-achromatic so it reads as texture instead of
+    // competing with the lines. Desaturating at its old hue 191 was not enough
+    // (ΔE 6.3 → 5.7); going achromatic is what actually works (→ 11.1).
+    label: "Bus",         hue: 200,
+    env: { s0: 0.00, s1: 0.10, l0: 0.30, l1: 0.26 },
+    speedFast: 12,                     // m/s ≈ 43 km/h → brightest colour
+    width: 2, radius: [22, 26],
+  },
+  aircraft: {
+    // Was amber 38, which sat inside metro Orange (28) and Yellow (50) — the worst
+    // collision in the whole scheme at ΔE 4.6. Crimson is clear of both.
+    label: "Aircraft",    hue: 4,
+    speedFast: 230,                    // m/s ≈ 830 km/h
+    width: 2.5, radius: [40, 40],
+  },
+  train: {
+    label: "Train (exo)", hue: 260,   // indigo-violet, clear of metro Blue 203
+    speedFast: 28,
+    width: 2.5, radius: [30, 30],
+  },
+  rem: {
+    // REM's own brand green, verbatim from route_color: #73A400 = hsl(78, 100%, 32%),
+    // a lime/yellow-green, 71° from metro Green's emerald 149. The lightness floor is
+    // lifted so the two greens stay apart at their dark ends too (ΔE 10.5 → 12.0);
+    // REM is grade-separated and rarely crawls, so its slow end is the least-used
+    // part of its ramp and the cheapest place to spend that adjustment.
+    label: "REM",         official: "#73A400",
+    env: { l0: 0.30, l1: 0.42 },
+    speedFast: 26,
+    width: 2.5, radius: [28, 28],
+  },
+  // Metro does not use a single hue — STM's four lines have official colours,
+  // so the metro layer looks them up in this table. Each line gets its own ramp
+  // built from that hex, so speed shading still works inside a line's colour.
+  metro: {
+    label: "Metro",       hue: null,
+    speedFast: 18,
+    width: 3, radius: [30, 30],
+    lines: { "1": "#00A650", "2": "#F58220", "4": "#FFD400", "5": "#0072BC" },
+    // Yellow alone barely registers on the dark basemap (ΔE 23.8 vs the background,
+    // against 42.2 once lifted). Its hue is fixed, so the floor is raised instead —
+    // a ramp-parameter change, where per-line width would mean splitting metro into
+    // four separate TripsLayers.
+    lineEnv: { "4": { s0: 0.34, s1: 0.56, l0: 0.40, l1: 0.34 } },
+  },
+};
+
+const LUT_STEPS = 24;
+
+// Default speed envelope: slow = dark and desaturated (parked vehicles read as
+// background noise), fast = bright and saturated. A mode may override any of these
+// via `env` to separate itself on lightness/chroma when its hue is not negotiable.
+const RAMP = { l0: 0.24, l1: 0.48, s0: 0.30, s1: 0.60 };
+
+function buildRamp(hue, env) {
+  const e = Object.assign({}, RAMP, env || {});
+  const ramp = [];
+  for (let i = 0; i < LUT_STEPS; i++) {
+    const t = i / (LUT_STEPS - 1);
+    const l = e.l0 + e.l1 * t;
+    const s = e.s0 + e.s1 * t;
+    // The fast end shifts 14°, so even a single mode is not one flat colour
+    const h = (hue + 14 * t) % 360;
+    ramp.push(hslToRgb(h / 360, s, l));
+  }
+  return ramp;
+}
+
+// Hue of a hex colour. Only the hue is taken: saturation and lightness come from
+// buildRamp's curve, so an official line colour still reads as the same family while
+// keeping the slow-dark / fast-bright behaviour every other mode has.
+function hexHue(hex) {
+  const v = parseInt(hex.replace("#", ""), 16);
+  const r = ((v >> 16) & 255) / 255, g = ((v >> 8) & 255) / 255, b = (v & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (d === 0) return 0;
+  let h;
+  if (max === r)      h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else                h = (r - g) / d + 4;
+  h *= 60;
+  return h < 0 ? h + 360 : h;
+}
+
+for (const m of Object.values(MODES)) {
+  // A mode with an official brand colour derives its hue from that hex, never a
+  // hand-picked number — same rule metro's four lines already follow.
+  if (m.official) m.hue = hexHue(m.official);
+  if (m.hue !== null && m.hue !== undefined) {
+    m.ramp = buildRamp(m.hue, m.env);
+    m.base = m.ramp[Math.round(LUT_STEPS * 0.68)];
+  } else if (m.lines) {
+    // One ramp per line. Without this, m.ramp stays undefined and the first metro
+    // trip to arrive throws inside rampColor().
+    m.ramps = {};
+    m.bases = {};
+    for (const [lineId, hex] of Object.entries(m.lines)) {
+      const ramp = buildRamp(hexHue(hex), (m.lineEnv || {})[lineId]);
+      m.ramps[lineId] = ramp;
+      m.bases[lineId] = ramp[Math.round(LUT_STEPS * 0.68)];
+    }
+    // Fallback for a trip on an unknown line, and for the legend's gradient bar.
+    const firstLine = Object.keys(m.lines)[0];
+    m.ramp = m.ramps[firstLine];
+    m.base = m.bases[firstLine];
+  }
+}
+
+// The ramp a specific trip should use. Single-hue modes share one; metro resolves by
+// route_id, which is exactly what the simulator puts in `label`.
+function tripRamp(trip) {
+  const m = MODES[trip.mode];
+  if (m.ramps) return m.ramps[trip.label] || m.ramp;
+  return m.ramp;
+}
+
+function rampAt(ramp, t) {
+  const i = Math.round(Math.max(0, Math.min(1, t)) * (LUT_STEPS - 1));
+  return ramp[i];
+}
+
+function rampColor(mode, t) {
+  return rampAt(mode.ramp, t);
+}
+
+const SPEED_REJECT_FACTOR = 4;  // above N× this mode's speedFast → treat as a GPS jump
+const SPEED_GAMMA = 0.75;       // <1 = lifts the low/mid speed range a little
+
+/* ============================================================ */
+
+/* ------------------------------------------------------------------
+   Data loading.
+
+   Every parameter present in the page URL is forwarded verbatim to
+   /api/trips, so /web/?layer=all&start=...&end=... renders exactly what
+   the same query returns via curl.
+
+   A window is derived from /api/range ONLY when the URL supplies none.
+   Which default depends on the layer: /api/range's `overlap` only knows
+   the recorded tables, so it is meaningless for simulated modes — those
+   use `busiest_hour` instead.
+
+   The static export is still a fallback, but never a silent one: any
+   fallback or non-200 is reported in the panel, because a silent
+   fallback is exactly what made a dead backend look like a working page.
+   ------------------------------------------------------------------ */
+
+const STATIC_URL = "../data/trips.json";
+const PASSTHROUGH = ["layer", "start", "end", "hours", "route",
+                     "min_points", "include_ground"];
+const SIM_MODES = ["metro", "train", "rem"];
+
+function banner(msg, isError) {
+  const el = document.getElementById("banner");
+  el.innerHTML = msg;
+  el.className = "show" + (isError ? " err" : "");
+}
+
+function fmtClock(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso)
+    : d.toLocaleString([], { month: "short", day: "numeric",
+                             hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// Pull the point count out of the API's 413 detail so the banner can state it.
+async function describeFailure(res, url) {
+  let detail = "";
+  try {
+    const body = await res.json();
+    if (body && body.detail) detail = " — " + body.detail;
+  } catch (e) { /* non-JSON error body */ }
+  return "<code>" + url + "</code> returned <b>" + res.status + "</b>" + detail;
+}
+
+function widestLayer(layers) {
+  let best = null;
+  for (const v of Object.values(layers || {})) {
+    if (!v.min_time || !v.max_time) continue;
+    const span = new Date(v.max_time) - new Date(v.min_time);
+    if (!best || span > best.span) {
+      best = { span, start: v.min_time, end: v.max_time };
+    }
+  }
+  return best;
+}
+
+async function loadFromApi(state) {
+  const page = new URLSearchParams(location.search);
+  const q = new URLSearchParams();
+  for (const k of PASSTHROUGH) {
+    if (page.has(k)) q.set(k, page.get(k));
+  }
+  state.forwarded = [...q.keys()];
+
+  const layer = q.get("layer") || "both";
+  const wantsSim = layer === "all" || SIM_MODES.includes(layer);
+
+  // Only derive a window when the URL gave none.
+  if (!q.has("start") && !q.has("end") && !q.has("hours")) {
+    const rangeRes = await fetch("/api/range");
+    if (!rangeRes.ok) throw new Error(await describeFailure(rangeRes, "/api/range"));
+    const range = await rangeRes.json();
+
+    // `overlap` is bus ∩ aircraft — the right default for recorded layers, and the
+    // wrong one for simulated modes, which it knows nothing about.
+    const win = wantsSim
+      ? (range.busiest_hour || range.overlap || widestLayer(range.layers))
+      : (range.overlap || widestLayer(range.layers));
+
+    if (win) {
+      q.set("start", win.start);
+      q.set("end", win.end);
+      state.derived = wantsSim ? "busiest recorded hour" : "recorded overlap";
+    }
+  }
+
+  const url = "/api/trips?" + q.toString();
+  state.url = url;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(await describeFailure(res, "/api/trips"));
+  return res.json();
+}
+
+// What was actually served — shown so a mismatch with the URL is obvious at a glance.
+function showSource(data, state) {
+  const el = document.getElementById("source");
+  const modes = (data.modes || []).join(", ") || "—";
+  const bits = [];
+  bits.push("<b>" + fmtClock(data.start_time) + "</b> → <b>" +
+            fmtClock(data.end_time) + "</b>");
+  bits.push("modes <b>" + modes + "</b>");
+  bits.push(state.live ? "source <b>/api/trips</b>"
+          : state.scene ? "source <b>curated scene</b>"
+          : "source <b>static file</b>");
+  if (state.derived) bits.push("window: " + state.derived);
+  else if (state.live) bits.push("window: from URL");
+  el.innerHTML = bits.join(" · ");
+  el.className = state.live ? "live" : "";
+}
+
+const loadState = { live: false, scene: null, derived: null, url: null, forwarded: [] };
+
+/* ------------------------------------------------------------------
+   Curated scenes (GitHub Pages mode).
+
+   On github.io there is no backend and never will be: baked scenes in
+   docs/scenes/ are THE mode, not a fallback, so no warning banner —
+   design decision #10 is about SILENT fallbacks, not about deliberately
+   static deployments. Locally the API stays first; scenes serve as a
+   loud fallback if it is down; the old ../data/trips.json remains the
+   last resort.
+   ------------------------------------------------------------------ */
+const SCENES_URL = "scenes/manifest.json";
+const ON_PAGES = location.hostname.endsWith("github.io");
+
+async function fetchManifest() {
+  try {
+    const r = await fetch(SCENES_URL, { cache: "no-cache" });
+    return r.ok ? await r.json() : null;
+  } catch (e) { return null; }
+}
+
+function buildScenePicker(manifest, current) {
+  const sel = document.getElementById("sceneSel");
+  sel.innerHTML = "";
+  for (const sc of manifest.scenes) {
+    const o = document.createElement("option");
+    o.value = sc.slug;
+    o.textContent = sc.label;
+    if (sc.slug === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  // Full reload on change: init() builds the map and closures exactly once,
+  // and a clean reload is simpler and safer than tearing all of that down.
+  sel.addEventListener("change", () => {
+    const u = new URL(location.href);
+    u.searchParams.set("scene", sel.value);
+    location.href = u.toString();
+  });
+  document.getElementById("sceneRow").style.display = "flex";
+}
+
+async function loadScene(manifest) {
+  const q = new URLSearchParams(location.search);
+  const slug = q.get("scene") || manifest.scenes[0].slug;
+  const sc = manifest.scenes.find(x => x.slug === slug) || manifest.scenes[0];
+  buildScenePicker(manifest, sc.slug);
+  const r = await fetch("scenes/" + sc.file);
+  if (!r.ok) throw new Error("scenes/" + sc.file + " -> " + r.status);
+  loadState.scene = sc.slug;
+  return r.json();
+}
+
+async function boot() {
+  if (ON_PAGES) {
+    const m = await fetchManifest();
+    if (!m) throw new Error("scenes/manifest.json missing - run scripts/bake_scenes.sh and commit docs/scenes/");
+    return loadScene(m);
+  }
+  try {
+    const data = await loadFromApi(loadState);
+    loadState.live = true;
+    return data;
+  } catch (err) {
+    console.warn("API load failed:", err.message);
+    const m = await fetchManifest();
+    if (m) {
+      banner("API unavailable: " + err.message + "<br>Showing baked scenes instead.", false);
+      return loadScene(m);
+    }
+    banner("API unavailable: " + err.message +
+           "<br>Showing static <code>" + STATIC_URL + "</code> instead - " +
+           "this is <b>not</b> the window you asked for.", false);
+    const r = await fetch(STATIC_URL);
+    if (!r.ok) throw new Error(STATIC_URL + " -> " + r.status);
+    return r.json();
+  }
+}
+
+boot()
+  .then(data => { init(data); showSource(data, loadState); })
+  .catch(err => {
+    document.getElementById("stats").textContent = "Load failed";
+    banner("Nothing could be loaded. " + String(err.message || err), true);
+  });
+
+function init(data) {
+  const { start_time, duration_sec, trips } = data;
+  const startMs = new Date(start_time).getTime();
+
+  // Older trips.json has no mode field → treat everything as a bus (backward compatible)
+  for (const trip of trips) {
+    if (!MODES[trip.mode]) trip.mode = "bus";
+    if (trip.label == null) trip.label = trip.route_id ?? null;
+    if (trip.id == null) trip.id = trip.vehicle_id ?? null;
+    // Resolved once here so the render loop never has to look a line up per frame.
+    trip.ramp = tripRamp(trip);
+    trip.baseColor = trip.ramp[Math.round(LUT_STEPS * 0.68)];
+  }
+
+  buildSpeeds(trips);
+
+  // Group by mode; each mode gets its own set of layers
+  const byMode = {};
+  for (const trip of trips) (byMode[trip.mode] ||= []).push(trip);
+
+  const present = Object.keys(MODES).filter(k => byMode[k]);
+  const enabled = {};
+  for (const k of present) enabled[k] = true;
+
+  const totalPoints = trips.reduce((a, t) => a + t.path.length, 0);
+  document.getElementById("stats").innerHTML =
+    `<span>${trips.length.toLocaleString()}</span> vehicles · ` +
+    `<span>${totalPoints.toLocaleString()}</span> points · ` +
+    `<span>${(duration_sec / 60).toFixed(0)}</span> min`;
+
+  buildLegend(byMode, enabled, () => render());
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    center: [-73.5772, 45.5048],
+    zoom: 11,
+    pitch: 45,
+    bearing: -10,
+    attributionControl: false,
+  });
+  map.addControl(new maplibregl.AttributionControl({ compact: true }));
+
+  const overlay = new MapboxOverlay({ interleaved: false, layers: [] });
+
+  // The replay must not depend on the basemap. Attaching the deck.gl overlay needs the
+  // map's GL context, so that still waits for "load" — but the animation loop does not,
+  // and gating it on "load" meant a slow or failed CARTO fetch froze the whole replay at
+  // --:--:-- even though the data was already in memory.
+  let overlayAttached = false;
+  function attachOverlay() {
+    if (overlayAttached) return;
+    overlayAttached = true;
+    try {
+      map.addControl(overlay);
+    } catch (e) {
+      banner("Basemap overlay failed to attach: " + e.message +
+             "<br>Trails cannot draw, though the data loaded fine.", true);
+    }
+  }
+
+  map.on("load", attachOverlay);
+  map.on("error", e => {
+    const msg = (e && e.error && e.error.message) || "unknown error";
+    banner("Basemap failed to load (<code>" + msg + "</code>). " +
+           "The replay clock keeps running; map tiles and trails may be missing.", false);
+  });
+  // The animation loop is kicked off at the end of init(), NOT here: `animate` closes
+  // over `lastFrameMs`/`currentTime`, which are declared below, so starting it at this
+  // point hits the temporal dead zone. It also must not wait for map "load" — see below.
+
+  let currentTime = 0;
+  let speed = 60;
+  let trailLength = 600;
+  let playing = true;
+  let speedShading = true;
+  let lastFrameMs = performance.now();
+
+  const slider = document.getElementById("timeSlider");
+  slider.max = duration_sec;
+  slider.addEventListener("input", e => {
+    currentTime = +e.target.value;
+    playing = false;
+    document.getElementById("playBtn").textContent = "▶ Play";
+    render();
+  });
+
+  const trailSlider = document.getElementById("trailSlider");
+  trailSlider.addEventListener("input", e => {
+    trailLength = +e.target.value;
+    document.getElementById("trailVal").textContent =
+      trailLength >= 60 ? `${Math.round(trailLength / 60)}m` : `${trailLength}s`;
+    render();
+  });
+
+  document.querySelectorAll("button[data-speed]").forEach(b => {
+    b.addEventListener("click", () => {
+      speed = +b.dataset.speed;
+      document.querySelectorAll("button[data-speed]").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+    });
+  });
+
+  document.getElementById("playBtn").addEventListener("click", e => {
+    playing = !playing;
+    e.target.textContent = playing ? "⏸ Pause" : "▶ Play";
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    currentTime = 0;
+    render();
+  });
+
+  document.getElementById("shadeBtn").addEventListener("click", e => {
+    speedShading = !speedShading;
+    e.target.classList.toggle("active", speedShading);
+    document.getElementById("ramp").style.opacity = speedShading ? 1 : 0.3;
+    render();
+  });
+
+  // Deliberately not gated on map "load". Attaching the deck.gl overlay needs the map's
+  // GL context and so does wait for that event, but the replay itself does not: gating
+  // the loop on "load" meant a slow or failed CARTO basemap froze the clock at --:--:--
+  // even though every trip was already in memory.
+  animate();
+
+  function animate() {
+    const now = performance.now();
+    const dt = (now - lastFrameMs) / 1000;
+    lastFrameMs = now;
+    if (playing) {
+      currentTime += dt * speed;
+      if (currentTime > duration_sec) currentTime = 0;
+    }
+    render();
+    requestAnimationFrame(animate);
+  }
+
+  function render() {
+    slider.value = currentTime;
+    const realMs = startMs + currentTime * 1000;
+    document.getElementById("clock").textContent =
+      new Date(realMs).toLocaleTimeString("en-CA", { hour12: false }) +
+      "  · t+" + Math.floor(currentTime) + "s";
+
+    const layers = [];
+    const liveParts = [];
+
+    for (const key of present) {
+      if (!enabled[key]) continue;
+      const mode = MODES[key];
+      const modeTrips = byMode[key];
+
+      // Each vehicle's current position + speed (linear interpolation),
+      // feeding the ScatterplotLayer head dots
+      const heads = [];
+      for (const trip of modeTrips) {
+        const ts = trip.timestamps;
+        if (currentTime < ts[0] || currentTime > ts[ts.length - 1]) continue;
+        let lo = 0, hi = ts.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1;
+          if (ts[mid] <= currentTime) lo = mid; else hi = mid;
+        }
+        const t0 = ts[lo], t1 = ts[hi];
+        const f = t1 === t0 ? 0 : (currentTime - t0) / (t1 - t0);
+        const p0 = trip.path[lo], p1 = trip.path[hi];
+        const sn = trip.speedNorm[lo] + (trip.speedNorm[hi] - trip.speedNorm[lo]) * f;
+        heads.push({
+          position: [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f],
+          color: speedShading ? rampAt(trip.ramp, sn) : trip.baseColor,
+          radius: mode.radius[0] + mode.radius[1] * sn,
+        });
+      }
+      liveParts.push(`<span>${heads.length.toLocaleString()}</span> ${mode.label.toLowerCase()}`);
+
+      layers.push(new TripsLayer({
+        id: "trails-" + key,
+        data: modeTrips,
+        getPath: d => d.path,
+        getTimestamps: d => d.timestamps,
+        // Per-vertex colouring: the same vehicle dims at intersections and
+        // brightens when it is flowing
+        getColor: speedShading ? (d => d.colors) : (d => d.baseColor),
+        updateTriggers: { getColor: speedShading },
+        opacity: 0.85,
+        widthMinPixels: mode.width,
+        rounded: true,
+        trailLength,
+        currentTime,
+      }));
+
+      layers.push(new ScatterplotLayer({
+        id: "heads-" + key,
+        data: heads,
+        getPosition: d => d.position,
+        getFillColor: d => d.color,
+        getRadius: d => d.radius,
+        radiusMinPixels: 2.5,
+        radiusMaxPixels: key === "bus" ? 6 : 8,
+        stroked: true,
+        getLineColor: [255, 255, 255, 170],
+        lineWidthMinPixels: 1,
+        updateTriggers: { getFillColor: speedShading },
+      }));
+    }
+
+    document.getElementById("live").innerHTML =
+      liveParts.length ? liveParts.join(" · ") + " in motion" : "&nbsp;";
+
+    overlay.setProps({ layers });
+  }
+}
+
+/* ============================================================
+   Compute speed from the path itself
+   ------------------------------------------------------------
+   trips.json carries no speed field, and the GTFS-RT speed stored in the DB is
+   frequently null, so speed comes from the distance / time difference between
+   consecutive points. Sampling interval + GPS jitter make that noisy, hence the
+   jump rejection and 3-point smoothing.
+   ============================================================ */
+function buildSpeeds(trips) {
+  for (const trip of trips) {
+    const path = trip.path, ts = trip.timestamps, n = path.length;
+    const mode = MODES[trip.mode];
+    const reject = mode.speedFast * SPEED_REJECT_FACTOR;
+
+    const seg = new Float32Array(Math.max(n - 1, 1));
+    for (let i = 0; i < n - 1; i++) {
+      const dt = ts[i + 1] - ts[i];
+      const d = metersBetween(path[i], path[i + 1]);
+      let s = dt > 0 ? d / dt : 0;
+      if (!isFinite(s) || s > reject) s = i > 0 ? seg[i - 1] : 0;
+      seg[i] = s;
+    }
+
+    const raw = new Float32Array(n);
+    raw[0] = seg[0];
+    raw[n - 1] = seg[Math.max(n - 2, 0)];
+    for (let i = 1; i < n - 1; i++) raw[i] = (seg[i - 1] + seg[i]) / 2;
+
+    const norm = new Float32Array(n);
+    const colors = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = raw[Math.max(i - 1, 0)], b = raw[i], c = raw[Math.min(i + 1, n - 1)];
+      const sm = (a + 2 * b + c) / 4;
+      const t = Math.pow(Math.min(sm / mode.speedFast, 1), SPEED_GAMMA);
+      norm[i] = t;
+      colors[i] = rampAt(trip.ramp, t);   // shared LUT array, so this does not blow up memory
+    }
+
+    trip.speedNorm = norm;
+    trip.colors = colors;
+  }
+}
+
+// Equirectangular approximation: negligible error at city scale, faster than haversine
+function metersBetween(a, b) {
+  const R = 6371000, D = Math.PI / 180;
+  const dLat = (b[1] - a[1]) * D;
+  const dLon = (b[0] - a[0]) * D * Math.cos((a[1] + b[1]) / 2 * D);
+  return Math.hypot(dLat, dLon) * R;
+}
+
+function buildLegend(byMode, enabled, onToggle) {
+  const list = document.getElementById("modeList");
+  list.innerHTML = "";
+
+  for (const [key, m] of Object.entries(MODES)) {
+    const trips = byMode[key];
+    const has = !!trips;
+
+    // The swatch is a gradient too: modes with a ramp use its slow→fast ends,
+    // metro uses its four official line colours
+    const swatch = m.hue !== null
+      ? `linear-gradient(135deg, rgb(${m.ramp[4].join(",")}), rgb(${m.ramp[LUT_STEPS - 1].join(",")}))`
+      : `linear-gradient(135deg, ${Object.values(m.lines).join(", ")})`;
+
+    const row = document.createElement("div");
+    row.className = "mode " + (has ? "on" : "off");
+    row.innerHTML =
+      `<span class="sw" style="background:${swatch}"><span class="kn"></span></span>` +
+      `<span>${m.label}</span>` +
+      `<span class="tag">${has ? trips.length.toLocaleString() : "soon"}</span>`;
+
+    if (has) {
+      row.addEventListener("click", () => {
+        enabled[key] = !enabled[key];
+        row.classList.toggle("hidden", !enabled[key]);
+        onToggle();
+      });
+    }
+    list.appendChild(row);
+  }
+
+  // The gradient bar is generated from the first mode that has data, so it always
+  // matches the colours on the map
+  const first = Object.keys(byMode)[0] || "bus";
+  // Neutral grey, always. The bar explains the ENCODING — dark = slow, bright = fast —
+  // and must not imply a hue: built from whichever mode happened to be first in the
+  // data, it rendered as one green scale and read as though the whole map used it.
+  // Each mode's own slow→fast gradient is already shown in its toggle swatch.
+  const ramp = buildRamp(0, { s0: 0, s1: 0 });
+  document.getElementById("ramp").style.background =
+    `linear-gradient(90deg, ${ramp.map(c => `rgb(${c.join(",")})`).join(", ")})`;
+  document.getElementById("rampHi").textContent =
+    Object.keys(byMode).length > 1
+      ? "fast (per mode)"
+      : `${Math.round(MODES[first].speedFast * 3.6)} km/h+`;
+  document.getElementById("legend").style.display = "block";
+}
+
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+</script>
+
+</body>
+</html>
