@@ -519,14 +519,33 @@ async function loadFromApi(state) {
 
     // `overlap` is bus ∩ aircraft — the right default for recorded layers, and the
     // wrong one for simulated modes, which it knows nothing about.
-    const win = wantsSim
-      ? (range.busiest_hour || range.overlap || widestLayer(range.layers))
-      : (range.overlap || widestLayer(range.layers));
+    //
+    // It is also the wrong one once the fetchers have run for a while: the two tables
+    // then overlap for MONTHS, and a no-parameter load would ask the API to assemble a
+    // 100+ day payload — slow enough to look like a hang, and doomed to fail the point
+    // budget anyway. Past a few hours, prefer `busiest_hour`, which is bounded by
+    // construction and lands on the densest data rather than the widest.
+    const MAX_DERIVED_HOURS = 6;
+    const spanHours = w => (new Date(w.end) - new Date(w.start)) / 3600000;
+    const overlapSpan = range.overlap ? spanHours(range.overlap) : null;
+    const overlapTooWide = overlapSpan !== null && overlapSpan > MAX_DERIVED_HOURS;
+
+    let win, why;
+    if (wantsSim && range.busiest_hour) {
+      win = range.busiest_hour;
+      why = "busiest recorded hour";
+    } else if (overlapTooWide && range.busiest_hour) {
+      win = range.busiest_hour;
+      why = `busiest recorded hour (overlap spans ${overlapSpan.toFixed(0)}h)`;
+    } else {
+      win = range.overlap || range.busiest_hour || widestLayer(range.layers);
+      why = range.overlap ? "recorded overlap" : "busiest recorded hour";
+    }
 
     if (win) {
       q.set("start", win.start);
       q.set("end", win.end);
-      state.derived = wantsSim ? "busiest recorded hour" : "recorded overlap";
+      state.derived = why;
     }
   }
 
